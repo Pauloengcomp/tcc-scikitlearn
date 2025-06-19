@@ -1,85 +1,23 @@
 !pip install pysus
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
-from sklearn.preprocessing import LabelEncoder
-
 from pysus.online_data import SIM
-arquivos = SIM.download(groups=["cid10"],states='BA', years=2023)
-arquivos
-
-import os
-df = arquivos.to_dataframe()
-print(df.shape)
-df.head()
-
-modelo_rf = RandomForestClassifier(
-    n_estimators=100,         # Número de árvores na floresta
-    max_depth=10,             # Profundidade máxima das árvores
-    class_weight='balanced',  # Balanceamento automático das classes
-    random_state=42,          # Reprodutibilidade
-    n_jobs=-1                 # Utilizar todos os núcleos disponíveis
-)
-
-X_train = X_train.fillna(0)
-X_test = X_test.fillna(0)
-
-X = X.fillna(-1)  # ou outro valor para nulos
-
-# Codificar variáveis categóricas
-X = pd.get_dummies(X)
-
-# Codificar y (CAUSABAS) como números (para o modelo)
-le = LabelEncoder()
-y_encoded = le.fit_transform(y)
-
-df_sample = df.sample(frac=0.1, random_state=42)  # 10% da base
-
-X = df_sample[['IDADE', 'SEXO', 'RACACOR', 'ESC', 'LOCOCOR']]
-y = df_sample['CAUSABAS']
-
-from sklearn.preprocessing import LabelEncoder
-
-le = LabelEncoder()
-for col in ['SEXO', 'RACACOR', 'ESC', 'LOCOCOR']:
-    X[col] = le.fit_transform(X[col].astype(str))
-
-limiar = 10  # mínimo de ocorrências para manter classe
-frequentes = y.value_counts()[y.value_counts() >= limiar].index
-
-y_agrupado = y.where(y.isin(frequentes), other='OUTROS')
-
-print(y_agrupado.value_counts())
-
+import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y_agrupado, test_size=0.2, random_state=42, stratify=y_agrupado
-)
-
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, f1_score, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-modelo = DecisionTreeClassifier(max_depth=10, random_state=42)
-modelo.fit(X_train, y_train)
+# 1. Download dos dados
+arquivos = SIM.download(groups=["cid10"], states='BA', years=2023)
+df = arquivos.to_dataframe()
+df_model = df.copy()
 
-from sklearn.metrics import accuracy_score, classification_report
+# 2. Conversão da idade
+df_model['IDADE'] = pd.to_numeric(df_model['IDADE'], errors='coerce')
 
-y_pred = modelo.predict(X_test)
-
-acc = accuracy_score(y_test, y_pred)
-print(f"Acurácia: {acc:.2f}")
-
-print("Relatório de Classificação:")
-print(classification_report(y_test, y_pred))
-
-# Criar a coluna de capítulo CID
-y_capitulo = y.str[0]
-
-print(y_capitulo.value_counts())
-
-
-# Função para criar faixas etárias
+# 3. Criar faixa etária
 def faixa_etaria(idade):
     if idade <= 1:
         return 'Bebê'
@@ -92,100 +30,21 @@ def faixa_etaria(idade):
     else:
         return 'Idoso'
 
-X = df_sample[['IDADE', 'SEXO', 'RACACOR', 'ESC', 'LOCOCOR']].copy()
+df_model['FAIXA_ETARIA'] = df_model['IDADE'].apply(faixa_etaria)
 
-# Agora pode seguir normalmente:
-X['IDADE'] = pd.to_numeric(X['IDADE'], errors='coerce')
-X['IDADE'] = X['IDADE'].fillna(X['IDADE'].median())
-X['FAIXA_ETARIA'] = X['IDADE'].apply(faixa_etaria)
+# 4. Checar e tratar ausentes
+print("Valores ausentes por coluna:")
+print(df_model[['IDADE', 'SEXO', 'RACACOR', 'ESC', 'LOCOCOR']].isnull().sum())
 
-from sklearn.preprocessing import LabelEncoder
+if df_model['IDADE'].isnull().sum() > 0:
+    df_model['IDADE'].fillna(df_model['IDADE'].median(), inplace=True)
 
-le = LabelEncoder()
-for col in ['SEXO', 'RACACOR', 'ESC', 'LOCOCOR', 'FAIXA_ETARIA']:
-    X[col] = le.fit_transform(X[col].astype(str))
+for col in ['SEXO', 'RACACOR', 'ESC', 'LOCOCOR']:
+    if df_model[col].isnull().sum() > 0:
+        df_model[col].fillna(df_model[col].mode()[0], inplace=True)
 
-# 1. Contar as classes
-vc = y_capitulo.value_counts()
-
-# 2. Manter apenas capítulos com 2 ou mais ocorrências
-capitulos_validos = vc[vc >= 2].index
-
-# 3. Filtrar
-mask = y_capitulo.isin(capitulos_validos)
-X = X[mask]
-y_capitulo = y_capitulo[mask]
-
-# 4. Agora fazer o train_test_split com stratify
-from sklearn.model_selection import train_test_split
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y_capitulo, test_size=0.2, random_state=42, stratify=y_capitulo
-)
-
-from sklearn.tree import DecisionTreeClassifier
-
-modelo = DecisionTreeClassifier(
-    max_depth=10,              # limita a profundidade para evitar overfitting
-    min_samples_split=10,      # mínimo de amostras para dividir um nó
-    min_samples_leaf=5,        # mínimo de amostras em cada folha
-    class_weight='balanced',   # balanceia as classes automaticamente
-    random_state=42
-)
-
-modelo.fit(X_train, y_train)
-
-y_pred = modelo.predict(X_test)
-
-from sklearn.metrics import accuracy_score, f1_score, classification_report
-
-acc = accuracy_score(y_test, y_pred)
-f1_macro = f1_score(y_test, y_pred, average='macro')
-
-print(f"Acurácia: {acc:.2f}")
-print(f"F1 Macro: {f1_macro:.2f}")
-
-print("Relatório de Classificação:")
-print(classification_report(y_test, y_pred))
-
-pip install imblearn
-
-# Preencher valores ausentes
-X_train = X_train.fillna(0)
-
-# Converter todas as colunas para float
-X_train = X_train.astype(float)
-
-from imblearn.over_sampling import SMOTE
-
-sm = SMOTE(random_state=42)
-X_res, y_res = sm.fit_resample(X_train, y_train)
-
-print(f"Antes: {X_train.shape}, Depois: {X_res.shape}")
-
-from sklearn.tree import DecisionTreeClassifier
-
-modelo_smote = DecisionTreeClassifier(
-    max_depth=10,
-    min_samples_split=10,
-    min_samples_leaf=5,
-    class_weight='balanced',
-    random_state=42
-)
-
-modelo_smote.fit(X_res, y_res)
-
-from sklearn.metrics import accuracy_score, f1_score, classification_report
-
-y_pred_smote = modelo_smote.predict(X_test)
-
-acc_smote = accuracy_score(y_test, y_pred_smote)
-f1_macro_smote = f1_score(y_test, y_pred_smote, average='macro')
-
-print(f"[SMOTE] Acurácia: {acc_smote:.2f}")
-print(f"[SMOTE] F1 Macro: {f1_macro_smote:.2f}")
-print("Relatório SMOTE:")
-print(classification_report(y_test, y_pred_smote))
+# 5. Agrupamento da variável alvo em supergrupos
+df_model['CAPITULO_CID'] = df_model['CAUSABAS'].str[0]
 
 def agrupar_supergrupo(codigo):
     if codigo in ['A', 'B']:
@@ -199,15 +58,25 @@ def agrupar_supergrupo(codigo):
     else:
         return 'Outros'
 
-y_supergrupo = y_capitulo.apply(agrupar_supergrupo)
+df_model['GRUPO_CLINICO'] = df_model['CAPITULO_CID'].apply(agrupar_supergrupo)
 
-from sklearn.model_selection import train_test_split
+# 6. Seleção de variáveis
+X = df_model[['IDADE', 'SEXO', 'RACACOR', 'ESC', 'LOCOCOR', 'FAIXA_ETARIA']]
+y = df_model['GRUPO_CLINICO']
 
-X_train_sg, X_test_sg, y_train_sg, y_test_sg = train_test_split(
-    X, y_supergrupo, test_size=0.2, random_state=42, stratify=y_supergrupo
+# 7. Codificação
+le = LabelEncoder()
+for col in ['SEXO', 'RACACOR', 'ESC', 'LOCOCOR', 'FAIXA_ETARIA']:
+    X[col] = le.fit_transform(X[col].astype(str))
+
+# 8. Divisão treino/teste
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-modelo_sg = DecisionTreeClassifier(
+# 9. Modelo com Decision Tree
+print("\n=== Decision Tree ===")
+modelo_dt = DecisionTreeClassifier(
     max_depth=10,
     min_samples_split=10,
     min_samples_leaf=5,
@@ -215,14 +84,65 @@ modelo_sg = DecisionTreeClassifier(
     random_state=42
 )
 
-modelo_sg.fit(X_train_sg, y_train_sg)
+modelo_dt.fit(X_train, y_train)
+y_pred_dt = modelo_dt.predict(X_test)
 
-y_pred_sg = modelo_sg.predict(X_test_sg)
+acc_dt = accuracy_score(y_test, y_pred_dt)
+f1_dt = f1_score(y_test, y_pred_dt, average='macro')
 
-acc_sg = accuracy_score(y_test_sg, y_pred_sg)
-f1_macro_sg = f1_score(y_test_sg, y_pred_sg, average='macro')
+print(f"Acurácia: {acc_dt:.2f}")
+print(f"F1 Macro: {f1_dt:.2f}")
+print("Relatório de Classificação:")
+print(classification_report(y_test, y_pred_dt))
 
-print(f"[Supergrupo] Acurácia: {acc_sg:.2f}")
-print(f"[Supergrupo] F1 Macro: {f1_macro_sg:.2f}")
-print("Relatório Supergrupo:")
-print(classification_report(y_test_sg, y_pred_sg))
+# Matriz de confusão - Decision Tree
+cm_dt = pd.crosstab(y_test, y_pred_dt, rownames=['Classe Real'], colnames=['Classe Predita'])
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm_dt, annot=True, fmt='d', cmap='Greens')
+plt.title(f'Decision Tree - Matriz de Confusão (Acurácia: {acc_dt:.2f})')
+plt.xlabel('Classe Predita')
+plt.ylabel('Classe Real')
+plt.tight_layout()
+plt.show()
+
+# 10. Modelo com Random Forest
+print("\n=== Random Forest ===")
+modelo_rf = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=10,
+    class_weight='balanced',
+    random_state=42,
+    n_jobs=-1
+)
+
+modelo_rf.fit(X_train, y_train)
+y_pred_rf = modelo_rf.predict(X_test)
+
+acc_rf = accuracy_score(y_test, y_pred_rf)
+f1_rf = f1_score(y_test, y_pred_rf, average='macro')
+
+print(f"Acurácia: {acc_rf:.2f}")
+print(f"F1 Macro: {f1_rf:.2f}")
+print("Relatório de Classificação:")
+print(classification_report(y_test, y_pred_rf))
+
+# Matriz de confusão - Random Forest
+cm_rf = pd.crosstab(y_test, y_pred_rf, rownames=['Classe Real'], colnames=['Classe Predita'])
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm_rf, annot=True, fmt='d', cmap='Blues')
+plt.title(f'Random Forest - Matriz de Confusão (Acurácia: {acc_rf:.2f})')
+plt.xlabel('Classe Predita')
+plt.ylabel('Classe Real')
+plt.tight_layout()
+plt.show()
+
+# 11. Avaliação
+y_pred = modelo.predict(X_test)
+
+acc = accuracy_score(y_test, y_pred)
+f1_macro = f1_score(y_test, y_pred, average='macro')
+
+print(f"Acurácia: {acc:.2f}")
+print(f"F1 Macro: {f1_macro:.2f}")
+print("Relatório de Classificação:")
+print(classification_report(y_test, y_pred))
